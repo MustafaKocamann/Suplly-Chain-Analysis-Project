@@ -103,6 +103,11 @@ def create_binary_targets(train_data: pd.DataFrame) -> None:
             f"{missing}"
         )
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: İki adet bağımsız ikili (binary) hedef değişkeni oluşturuyoruz.
+    # 1. fraud: Siparişin şüpheli dolandırıcılık ('SUSPECTED_FRAUD') durumunda olup olmadığını belirtir.
+    #    Bu hedef son derece dengesizdir (yaklaşık %2.3 pozitif sınıf). SMOTE gibi dengesiz sınıf metotları gerektirir.
+    # 2. late_delivery: Teslimat durumunun gecikmiş ('Late delivery') olup olmadığını belirtir.
+    #    Bu hedef ise dengelidir (yaklaşık %55 pozitif sınıf), özel dengesiz sınıf yönetimi gerektirmez.
     train_data["fraud"] = (
         train_data["Order Status"].eq("SUSPECTED_FRAUD").astype("int8")
     )
@@ -118,28 +123,40 @@ def drop_modeling_exclusions(train_data: pd.DataFrame) -> None:
     """Step 3: Remove leakage, post-event, PII, redundant, and granular fields."""
     print_section("STEP 3 - DROP MODELING EXCLUSIONS")
 
-    # DATA LEAKAGE: direct labels or label proxies must not enter features.
+    # VERİ SIZINTISI (DATA LEAKAGE) ÖNLEME:
+    # 'Delivery Status', 'Late_delivery_risk' ve 'Order Status' kolonları, doğrudan tahmin etmek
+    # istediğimiz hedef değişkenlerin ('late_delivery' ve 'fraud') türevleridir veya doğrudan kendileridir.
+    # Bu kolonlar modelde kalırsa, model yapay bir şekilde %100 doğruluk gösterecek ancak gerçek hayatta (inference anında)
+    # bu bilgi elimizde olmayacağı için model tamamen başarısız olacaktır. Bu yüzden kesinlikle kaldırılmalıdır.
     safe_drop(
         train_data,
         ["Delivery Status", "Late_delivery_risk", "Order Status"],
         "DATA LEAKAGE",
     )
 
-    # POST-EVENT: shipping timestamp is not available when predicting at order time.
+    # EVENT-SONRASI (POST-EVENT) VERİLER:
+    # Tahminleme işlemi siparişin verildiği "sipariş anında" (order time) yapılacaktır. Ancak kargonun
+    # gönderilme tarihi olan 'Shipping date (DateOrders)', sipariş oluştuktan sonra kargolama anında belirlenir.
+    # Modelin prediction-time gerçekliğine uyması ve geleceği tahmin etme yanılsamasına düşmemesi için çıkarılır.
     safe_drop(
         train_data,
         ["Shipping date (DateOrders)", "shipping date (DateOrders)"],
         "POST-EVENT (NOT AVAILABLE AT PREDICTION TIME)",
     )
 
-    # DATETIME RAW: decomposed calendar features are used instead of raw timestamps.
+    # HAM ZAMAN DAMGALARI (DATETIME RAW):
+    # 'order date (DateOrders)' ve 'order_month_year' gibi ham tarih damgaları, doğrusal veya ağaç tabanlı modeller
+    # tarafından doğrudan anlamlandırılamaz. Bunun yerine EDA aşamasında çıkarılmış olan 'order_year', 'order_month',
+    # 'order_week_day', 'order_hour' gibi sayısal takvim özellikleri (decomposed features) modelde tutulur.
     safe_drop(
         train_data,
         ["order date (DateOrders)", "order_month_year"],
         "DATETIME RAW (DECOMPOSED FEATURES ALREADY EXIST)",
     )
 
-    # PII / NON-PREDICTIVE: removes sensitive identifiers and free-text address data.
+    # KİŞİSEL VERİLERİN KORUNMASI (PII / NON-PREDICTIVE):
+    # E-posta şifreleri, müşteri adları ve açık sokak adresleri gibi kişisel veriler, genel eğilimleri öğrenmek
+    # yerine modelin tek tek satırları ezberlemesine (overfitting) yol açar. Ayrıca PII veri güvenliği kurallarına aykırıdır.
     safe_drop(
         train_data,
         [
@@ -153,7 +170,9 @@ def drop_modeling_exclusions(train_data: pd.DataFrame) -> None:
         "PII / NON-PREDICTIVE",
     )
 
-    # HIGH CARDINALITY - NO PREDICTIVE VALUE: transactional IDs memorize rows.
+    # YÜKSEK KARDİNALİTELİ KİMLİK NUMARALARI (TRANSACTIONAL IDs):
+    # Sipariş kimliği, müşteri kimliği ve ürün kart kimliği gibi benzersiz veya çok yüksek kardinaliteli kimlik alanları
+    # modelin dallanma kriterlerinde (decision splits) her satırı ezbere ayırmasına neden olur ve tahmin gücü yoktur.
     safe_drop(
         train_data,
         [
@@ -167,9 +186,9 @@ def drop_modeling_exclusions(train_data: pd.DataFrame) -> None:
         "HIGH CARDINALITY - NO PREDICTIVE VALUE",
     )
 
-    # HIGH CARDINALITY LOCATION - TOO GRANULAR: city/ZIP fields can overfit and
-    # Order Zipcode is mostly missing, so it adds imputation noise without stable
-    # predictive value. Product Name is redundant with Category Name.
+    # AŞIRI DETAYLI COĞRAFİ KONUMLAR VE METİNLER (OVERFITTING ENGELLEME):
+    # Şehir isimleri ve posta kodları çok yüksek sayıda eşsiz sınıfa sahiptir. Posta kodlarının büyük kısmı eksiktir.
+    # Bu alanlar gürültü (noise) ekler ve overfitting yaratır. 'Product Name' ise 'Category Name' ile zaten temsil edilmektedir.
     safe_drop(
         train_data,
         [
@@ -182,24 +201,27 @@ def drop_modeling_exclusions(train_data: pd.DataFrame) -> None:
         "HIGH CARDINALITY LOCATION - TOO GRANULAR",
     )
 
-    # GEO COORDINATES: region/country fields already capture geography at a more
-    # stable business level, while raw coordinates can overfit to customer/order
-    # locations.
+    # ENLEM VE BOYLAM (GEO COORDINATES):
+    # Müşteri ve sipariş koordinatları çok hassas noktasal verilerdir ve ağaç modellerinin ezberlemesine (overfitting)
+    # yol açabilir. Projede bölgesel eğilimler 'Order Region' veya 'Order Country' gibi iş seviyesinde daha kararlı
+    # ve makro coğrafi alanlarla zaten başarıyla temsil edilmektedir.
     safe_drop(
         train_data,
         ["Latitude", "Longitude"],
         "GEO COORDINATES - COVERED BY REGION/COUNTRY",
     )
 
-    # REDUNDANT WITH CATEGORY NAME: product-level descriptions/images are too granular.
+    # REKABETÇİ / ÇOK DETAYLI GÖRSEL VE METİNLER:
+    # Ürün açıklamaları ve ürün görsel linkleri serbest metindir ve kategori bilgisi ile zaten gruplanmıştır.
     safe_drop(
         train_data,
         ["Product Description", "Product Image"],
         "REDUNDANT WITH CATEGORY NAME",
     )
 
-    # CONSTANT / NO VARIANCE: Product Status is 0 for every row in this dataset,
-    # so it cannot help any model split or coefficient.
+    # SIFIR VARYANS / SABİT KOLONLAR:
+    # 'Product Status' kolonu tüm satırlar için 0 değerini almaktadır. Hiçbir varyansı olmayan (bilgi taşımayan)
+    # kolonlar modelin karar eşiklerinde hiçbir ayrım gücüne sahip olamayacağı için veri setinden atılır.
     safe_drop(
         train_data,
         ["Product Status"],
@@ -217,6 +239,11 @@ def encode_with_label_encoders(
     """Step 4: Apply LabelEncoder to categorical columns for tree-based models."""
     print("\nLABEL ENCODING")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Ağaç tabanlı modeller (Random Forest, XGBoost, LightGBM vb.) için 
+    # Label Encoding en etkili ve verimli yöntemlerden biridir. Sütunların kardinalitesi (eşsiz değer sayısı) 
+    # yüksek olduğunda One-Hot Encoding uygulanması, binlerce seyrek (sparse) sütun üreterek belleğin (RAM) 
+    # taşmasına ve 'boyutun laneti' (curse of dimensionality) problemine yol açar. Ağaç algoritmaları sayısal 
+    # büyüklük ilişkisini kendisi dallandırarak çözebildiği için Label Encoding burada en optimal tercihtir.
     label_encoders: dict[str, LabelEncoder] = {}
 
     for col in LABEL_ENCODE_COLUMNS:
@@ -236,7 +263,8 @@ def encode_with_label_encoders(
         except Exception as exc:
             print(f"  failed: {col} — {exc}")
 
-    # Save mapping dicts to encoding_artifacts for audit trail
+    # Dağıtık sistemlerde ve inference (tahminleme) anında yeni veriyi aynı haritalama ile kodlamak
+    # amacıyla fit edilmiş LabelEncoder sınıflarını diskte saklamak üzere encoding_artifacts yapısına kaydediyoruz.
     encoding_artifacts["label_encoding_maps"] = {
         col: {str(cls): int(idx) for idx, cls in enumerate(le.classes_)}
         for col, le in label_encoders.items()
@@ -251,6 +279,10 @@ def one_hot_encode_group_a(
     """Step 4A: One-hot encode configured nominal categorical columns."""
     print("\nGROUP A - ONE-HOT ENCODING")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Düşük kardinaliteli nominal (sıralanamayan) kategorik değişkenler için
+    # One-Hot Encoding (kukla değişken oluşturma) doğrusal modeller (Logistic Regression vb.) için şarttır.
+    # Burada drop_first=True parametresi kullanılarak ilk kolon düşürülür; bu sayede doğrusal modellerdeki
+    # eşdoğrusallık (multicollinearity) ve 'dummy variable trap' (kukla değişken tuzağı) önlenmiş olur.
     one_hot_columns = [
         "Type",
         "Customer Segment",
@@ -277,8 +309,6 @@ def one_hot_encode_group_a(
     }
     print("  cardinalities:", cardinalities)
 
-    # drop_first=True limits multicollinearity for linear models while preserving
-    # enough signal for tree-based models.
     before_columns = set(train_data.columns)
     encoded = pd.get_dummies(
         train_data,
@@ -308,6 +338,10 @@ def encode_shipping_mode(
     """Step 4B: Apply explicit ordinal mapping for shipping service level."""
     print("\nGROUP B - MANUAL ORDINAL ENCODING")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Sıralı (ordinal) kategorik kolonlar için rastgele kodlama yerine
+    # manuel ağırlıklandırma kullanılır. Gönderim önceliği doğrudan iş mantığını yansıtır:
+    # 'Same Day' en hızlı/öncelikli kargo iken 'Standard Class' en yavaş kargo türüdür.
+    # Deterministik (belirlenmiş) bir harita kullanarak gelecekteki tahminleri de tutarlı hale getiriyoruz.
     shipping_mode_map = {
         "Same Day": 0,
         "First Class": 1,
@@ -320,7 +354,6 @@ def encode_shipping_mode(
         print("  skipped missing column: Shipping Mode")
         return
 
-    # Manual mapping is deterministic and reusable; fit_transform is avoided.
     train_data["Shipping Mode"] = train_data["Shipping Mode"].map(shipping_mode_map)
     print("  applied Shipping Mode mapping:")
     print(f"  {shipping_mode_map}")
@@ -335,6 +368,11 @@ def target_encode_group_c(
     if "late_delivery" not in train_data.columns:
         raise KeyError("late_delivery target is required for target encoding.")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Çok yüksek kardinaliteye sahip nominal kategoriler ('Order Region', 'Customer State' vb.)
+    # için One-Hot Encoding çok fazla kolon üretecektir. Bu durumu çözmek için hedef değişkenin ('late_delivery')
+    # o kategori grubundaki ortalama oranı (mean target encoding) kullanılır. Örneğin 'Eastern Asia' bölgesinde geçmişte
+    # geç teslimat oranı %65 ise, bu bölge adı 0.65 sayısal değeriyle temsil edilir. Bu sayede model karmaşıklığı 
+    # ve overfitting azaltılırken bilgi kaybı yaşanmaz.
     target_encoding_columns = [
         "Category Name",
         "Order Region",
@@ -350,8 +388,6 @@ def target_encode_group_c(
             print(f"  skipped missing/already encoded column: {column}")
             continue
 
-        # Mean encoding captures location/category-level late-delivery risk while
-        # avoiding very wide sparse matrices for high-cardinality nominal fields.
         encoding_map = train_data.groupby(column)["late_delivery"].mean()
         encoded_column = f"{column}_encoded"
 
@@ -365,8 +401,6 @@ def target_encode_group_c(
         target_encoding_maps[column] = map_dict
 
         print(f"\n  encoding map for {column}:")
-        # ensure_ascii=True avoids Windows console encoding failures for region
-        # names containing characters outside the active code page.
         print(json.dumps(map_dict, ensure_ascii=True, indent=2))
         print(f"  created: {encoded_column}; dropped original: {column}")
 
@@ -377,6 +411,9 @@ def confirm_numeric_pass_through(train_data: pd.DataFrame) -> None:
     """Step 4D: Confirm prebuilt numeric calendar features remain untouched."""
     print("\nGROUP D - NUMERIC CALENDAR FEATURES PASSED THROUGH AS-IS")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: EDA aşamasında zaman damgalarından türetilmiş olan sayısal (int) 
+    # özelliklerin (örneğin yıl, ay, gün, saat ve çeyrek) kodlama adımlarında bozulmadığını kontrol ediyoruz.
+    # Bu değişkenler halihazırda sayısal oldukları için direkt olarak model eğitimine aktarılırlar.
     numeric_calendar_columns = [
         "order_year",
         "order_month",
@@ -408,6 +445,7 @@ def encode_features(
         ),
     }
 
+    # Pipeline seviyesinde, ağaç tabanlı model stratejisine uygun olarak sütunları kodluyoruz.
     label_encoders = encode_with_label_encoders(train_data, encoding_artifacts)
     confirm_numeric_pass_through(train_data)
 
@@ -418,6 +456,10 @@ def validate_final_dataset(train_data: pd.DataFrame) -> None:
     """Step 5: Print final modeling-table validation checks."""
     print_section("STEP 5 - FINAL VALIDATION")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Modellemeye başlamadan önce verinin kalitesini kontrol etmek 
+    # hayati önem taşır. Scikit-learn kütüphaneleri eksik veri (NaN) veya metin tabanlı (object) 
+    # kolonlar aldığında hata fırlatır. Bu yüzden tüm verinin sayısal olduğundan ve eksik değer 
+    # barındırmadığından emin oluyoruz.
     print(f"train_data shape: {train_data.shape}")
 
     print("\nDtype counts:")

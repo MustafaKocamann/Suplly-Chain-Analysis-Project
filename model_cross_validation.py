@@ -198,7 +198,12 @@ def cross_validate_classifier(
         Xf_tr, Xf_val = X_f[tr_idx_f], X_f[val_idx_f]
         yf_tr, yf_val = y_f[tr_idx_f], y_f[val_idx_f]
 
-        # SMOTE sadece train split'e — val dokunulmaz (leakage-free!)
+        # KIYMETLİ VERİ BİLİMCİ UYARISI: SMOTE işleminin çapraz doğrulama (Cross-Validation) yaparken
+        # tüm eğitim verisine dışarıda uygulanması ÇOK BÜYÜK bir veri sızıntısı (data leakage) hatasıdır.
+        # Eğer dışarıda SMOTE yapıp sonra CV'ye sokarsak, sentetik veriler oluşturulurken doğrulama (validation)
+        # fold'larındaki bilgiler eğitim fold'larına sızar ve model yapay şekilde aşırı yüksek F1 skoru gösterir.
+        # Bu sızıntıyı tamamen sıfırlamak için, SMOTE işlemini YALNIZCA o fold'un kendi eğitim parçasına (Xf_tr, yf_tr) 
+        # uyguluyoruz. Doğrulama parçası (Xf_val, yf_val) ise tamamen dokunulmaz ve orijinal dağılımında kalıyor.
         if apply_smote_fraud:
             try:
                 smote = SMOTE(random_state=RANDOM_STATE, k_neighbors=SMOTE_K)

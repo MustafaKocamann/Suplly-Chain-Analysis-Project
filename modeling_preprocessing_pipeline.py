@@ -162,6 +162,11 @@ def separate_targets(
     print_section("STEP 1 - TARGET SEPARATION")
     validate_train_data(train_data)
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: İki adet hedef değişkenimiz olduğu için, her iki modeli
+    # birbirinden tamamen bağımsız eğiteceğiz. Bu aşamada, her hedef için kendi hedef kolonunu 
+    # ve diğer hedefin kolonunu (veri sızıntısı olmaması için) veri setinden düşürüyoruz.
+    # xf: dolandırıcılık öznitelikleri, yf: dolandırıcılık hedefi
+    # xl: geç teslimat öznitelikleri, yl: geç teslimat hedefi
     xf = train_data.drop(columns=["fraud", "late_delivery"])
     yf = train_data["fraud"]
     xl = train_data.drop(columns=["late_delivery", "fraud"])
@@ -182,6 +187,11 @@ def split_train_test(
     """Step 2: Stratified train/test split for both targets."""
     print_section("STEP 2 - TRAIN/TEST SPLIT")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Tabakalı bölümleme (Stratified Split) yapılması, dengesiz
+    # veri setlerinde hayati öneme sahiptir. 'stratify=y' parametresi sayesinde, eğitim ve test
+    # setlerindeki dolandırıcılık (pozitif sınıf oranı %2.3) ve geç teslimat oranlarının birbirine
+    # tamamen eşit olmasını garanti altına alıyoruz. Bu sayede test setimiz, ana veriyi en dürüst
+    # şekilde temsil eder ve rastgele dağılım hatalarının önüne geçilir.
     try:
         xf_train, xf_test, yf_train, yf_test = train_test_split(
             xf, yf, test_size=TEST_SIZE,
@@ -219,6 +229,11 @@ def impute_missing_values(
     """
     print_section("STEP 3A - MISSING VALUE IMPUTATION")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Eksik veri doldurma işleminde en büyük tuzak veri sızıntısıdır (data leakage).
+    # Tüm verinin medyanını hesaplayıp eksikleri doldurursak, test setindeki bilgileri eğitim setine sızdırmış oluruz.
+    # Bu yüzden SimpleImputer sınıfını YALNIZCA eğitim verisinde fit ediyoruz (.fit_transform) ve 
+    # test verisini sadece dönüştürüyoruz (.transform). Medyan (ortanca değer) stratejisi, ortalamaya kıyasla
+    # uç değerlerden etkilenmediği için çok daha kararlıdır.
     print("Missing values before imputation:")
     print(f"  Fraud train        : {int(xf_train.isna().sum().sum()):,}")
     print(f"  Fraud test         : {int(xf_test.isna().sum().sum()):,}")
@@ -251,6 +266,12 @@ def scale_features(
     """Step 3B: Fit RobustScaler on train only, then transform train/test."""
     print_section("STEP 3B - SCALING WITH ROBUSTSCALER")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Veri setinde 'Sales', 'Product Price' gibi uç değerlere (outliers) 
+    # sahip finansal sütunlar bulunmaktadır. Standart MinMaxScaler veya StandardScaler uç değerlerden 
+    # aşırı derecede etkilenerek verinin varyansını bozar. RobustScaler ise ortalama ve standart sapma yerine 
+    # çeyreklikler arası genişliği (IQR - Interquartile Range) kullandığı için uç değerlerden etkilenmez ve
+    # kararlı bir ölçekleme sunar. İmputasyonda olduğu gibi, sızıntıyı önlemek için ölçekleyici
+    # sadece eğitim setinde eğitilir.
     scaler_f = RobustScaler()
     scaler_l = RobustScaler()
 
@@ -285,6 +306,12 @@ def handle_class_imbalance(
     """
     print_section("STEP 4 - CLASS IMBALANCE HANDLING")
 
+    # KIYMETLİ VERİ BİLİMCİ NOTU: Dolandırıcılık hedefi son derece dengesizdir (~%2.3).
+    # Modelin pozitif sınıfı öğrenememesini engellemek için SMOTE (Synthetic Minority Over-sampling Technique)
+    # uygulayarak azınlık sınıfı yapay örneklerle çoğaltıyoruz.
+    # ÇOK KRİTİK UYARI: SMOTE işlemi YALNIZCA eğitim setine uygulanmalıdır. Test setine SMOTE uygulanırsa
+    # model kendi ürettiği yapay verileri tahmin eder ve yanıltıcı yüksek başarı skorları üretir.
+    # Geç teslimat hedefi zaten dengeli olduğu için (~%55) SMOTE uygulanmasına gerek yoktur.
     print("Fraud train distribution BEFORE SMOTE:")
     print_class_distribution(yf_train, "fraud train")
 
@@ -315,6 +342,9 @@ def save_preprocessors(
     """Step 5: Persist fitted imputers and scalers for inference-time reuse."""
     print_section("STEP 5 - SAVE PREPROCESSORS")
 
+    # Gelecekte yeni gelen tekil sipariş verilerini (tahmin anında) eğittiğimiz modelin
+    # anladığı ölçeğe getirmek için fit edilmiş ölçekleyicileri ve eksik değer doldurucuları
+    # joblib formatında diske kaydediyoruz. Bu işlem üretim (production) sistemleri için zorunludur.
     try:
         joblib.dump(imputer_f, IMPUTER_FRAUD_PATH)
         joblib.dump(imputer_l, IMPUTER_LATE_DELIVERY_PATH)

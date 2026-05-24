@@ -93,7 +93,12 @@ def compute_metrics(
     best_threshold = 0.5
     if y_proba is not None:
         if target_name == "fraud":
-            # For highly imbalanced fraud target, optimize threshold to maximize F1-score
+            # KIYMETLİ VERİ BİLİMCİ NOTU: Dolandırıcılık tespiti gibi yüksek derecede dengesiz veri setlerinde,
+            # varsayılan 0.50 karar eşik değeri (decision threshold) genellikle yetersiz kalır ve modelin 
+            # F1-skorunu (Precision ile Recall arasındaki denge) optimize etmez. Bu yüzden, 0.01 ile 0.99 
+            # aralığında bir tarama yaparak en yüksek F1-skorunu veren en iyi karar eşiğini (Decision Threshold) 
+            # dinamik olarak seçiyoruz. Bu sayede modelin kaçırdığı dolandırıcılık vakaları ile sahte alarmlar
+            # arasındaki dengeyi en dürüst şekilde optimize etmiş oluyoruz.
             best_f1 = -1.0
             for t in np.linspace(0.01, 0.99, 99):
                 y_pred_t = (y_proba >= t).astype(int)
@@ -104,10 +109,10 @@ def compute_metrics(
             y_pred = (y_proba >= best_threshold).astype(int)
             print(f"    [Tuning] Optimized threshold for {model.__class__.__name__:<25} -> {best_threshold:.2f} (Max F1: {best_f1:.4f})")
         else:
-            # For late delivery (balanced), keep standard 0.50 threshold
+            # Geç teslimat hedefi zaten dengeli (~%55) olduğu için standart 0.50 eşik değeriyle devam edilir.
             y_pred = (y_proba >= 0.5).astype(int)
     else:
-        # Fallback if no probabilities are available
+        # Modelin predict_proba desteği olmadığı durumlarda yedek (fallback) tahminleme mekanizması.
         y_pred = model.predict(X_test)
 
     metrics = {
